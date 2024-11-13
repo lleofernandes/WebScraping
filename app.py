@@ -11,8 +11,8 @@ from sqlalchemy import create_engine
 
 load_dotenv()
 
-TOKEN = os.getenv('TELEGRAM_TOKEN')
-CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 bot = Bot(token=TOKEN)
 
 POSTGRES_DB = os.getenv("POSTGRES_DB")
