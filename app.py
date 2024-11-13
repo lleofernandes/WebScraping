@@ -2,7 +2,6 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import pandas as pd
-import sqlite3
 import asyncio
 from telegram import Bot
 import os
@@ -21,15 +20,18 @@ POSTGRES_DB= os.getenv("POSTGRES_DB")
 POSTGRES_USER= os.getenv("POSTGRES_USER")
 POSTGRES_PASSWORD= os.getenv("POSTGRES_PASSWORD")
 POSTGRES_HOST= os.getenv("POSTGRES_HOST")
-POSTGRES_PORT= os.getenv("POSTGRES_PORT")
+POSTGRES_PORT= int(os.getenv("POSTGRES_PORT"))
 
 
-DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_DB}:{POSTGRES_PORT}"
+DATABASE_URL = f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 engine = create_engine(DATABASE_URL)
 
 #retorna o status da conexão 
 def fetch_page():
-    url = "https://www.mercadolivre.com.br/apple-iphone-16-pro-256-gb-titnio-deserto-distribuidor-autorizado/p/MLB1040287840#polycard_client=search-nordic&wid=MLB3846027829&sid=search&searchVariation=MLB1040287840&position=1&search_layout=stack&type=product&tracking_id=cb4ff30b-5eb8-40d1-b291-5a8b7e445646"
+    # url = "https://www.mercadolivre.com.br/apple-iphone-16-pro-256-gb-titnio-deserto-distribuidor-autorizado/p/MLB1040287840#polycard_client=search-nordic&wid=MLB3846027829&sid=search&searchVariation=MLB1040287840&position=1&search_layout=stack&type=product&tracking_id=cb4ff30b-5eb8-40d1-b291-5a8b7e445646"
+    
+    url = "https://www.mercadolivre.com.br/centrifuga-de-roupas-mueller-15kg-fit-branca-220v/p/MLB24005536#polycard_client=search-nordic&wid=MLB3751124265&sid=search&searchVariation=MLB24005536&position=6&search_layout=stack&type=product&tracking_id=4dc79df7-e4e6-4a1a-bdc5-0d557bcfb4cd"
+    
     response = requests.get(url)
     return response.text
 
@@ -54,7 +56,7 @@ def parse_page(html):
 
 def create_connection():
     conn = psycopg2.connect(
-        db_name=POSTGRES_DB,
+        dbname=POSTGRES_DB,
         user=POSTGRES_USER,
         password=POSTGRES_PASSWORD,
         host=POSTGRES_HOST,
@@ -65,33 +67,42 @@ def create_connection():
     
 def setup_database(conn):
     cursor = conn.cursor()
-    cursor.execute('''
-            CREATE TABLE IF NOT EXISTS prices (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                product_name TEXT,
-                old_price INTEGER,
-                new_price INTEGER,
-                installment_price INTEGER,
-                timestamp TEXT                                
-            )                   
-    ''')
-    conn.commit()
+    
+    try:
+        cursor.execute('''
+                CREATE TABLE IF NOT EXISTS prices (
+                    id SERIAL PRIMARY KEY,
+                    product_name TEXT,
+                    old_price INTEGER,
+                    new_price INTEGER,
+                    installment_price INTEGER,
+                    timestamp TEXT                                
+                )                   
+        ''')
+        conn.commit()
+    
+    except Exception as e:
+        print(f"Erro ao criar a tabela: {e}")
+        
+    finally:
+        cursor.close()
 
 
-def save_to_db(conn, product_info):
+def save_to_db(engine, product_info):
     new_row = pd.DataFrame([product_info])
-    new_row.to_sql('prices', conn,  if_exists='append', index=False)
+    new_row.to_sql('prices', engine,  if_exists='append', index=False)
     
 def get_max_price(conn):
     cursor = conn.cursor()
     cursor.execute('''
         SELECT new_price, timestamp FROM prices
-        WHERE new_price  = ( SELECT MAX(new_price) FROM prices );                       
+        WHERE new_price  = ( SELECT MAX(new_price) FROM prices )                       
     ''')
                    
     result = cursor.fetchone()
     cursor.close()
-    if result and result[0] is not None:
+    if result:
+    # if result and result[0] is not None:
         return result[0], result[1]
     return None, None
 
@@ -105,26 +116,28 @@ async def main():
     conn = create_connection()
     setup_database(conn)
     
-    while True:
-        page_content = fetch_page()
-        product_info = parse_page(page_content)
-        current_price = product_info['new_price']
-        
-        max_price, max_price_timestamp = get_max_price(conn)
-        
     
-        if max_price is None or current_price > max_price:            
-            await send_telegram_message(f'preço maior detectado: {current_price}')
-            max_price = current_price
-            max_price_timestamp = product_info['timestamp']
-        else:
-            await send_telegram_message(f'O maior preço registrado é {max_price} em {max_price_timestamp}')
+    try:
+        while True:
+            page_content = fetch_page()
+            product_info = parse_page(page_content)
+            current_price = product_info['new_price']
+            
+            max_price, max_price_timestamp = get_max_price(conn)
         
-        save_to_db(conn, product_info)
-        print('Dados salvos no banco de dados: ', product_info)
-        await asyncio.sleep(10)
-        
-    conn.close()
+            if max_price is None or current_price > max_price:            
+                await send_telegram_message(f'preço maior detectado: {current_price}')
+                max_price = current_price
+                max_price_timestamp = product_info['timestamp']
+            else:
+                await send_telegram_message(f'O maior preço registrado é: {max_price} em {max_price_timestamp}')
+            
+            save_to_db(engine, product_info)
+            print('Dados salvos no banco de dados: ', product_info)
+            await asyncio.sleep(10)
+    
+    finally:        
+        conn.close()
     
 asyncio.run(main())
 
